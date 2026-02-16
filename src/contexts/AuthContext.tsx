@@ -1,13 +1,16 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import api from '../lib/api';
 
-export type UserRole = 'admin' | 'doctor' | 'staff';
+export type UserRole = 'admin' | 'doctor' | 'staff' | 'patient';
 
 export interface User {
-  id: string;
+  id: string; // Backend sends _id, but we might mape it or use _id
+  _id?: string;
   email: string;
   name: string;
   role: UserRole;
   avatar?: string;
+  token?: string;
 }
 
 interface AuthContextType {
@@ -22,13 +25,6 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Mock users for demonstration
-const mockUsers: (User & { password: string })[] = [
-  { id: '1', email: 'admin@medicare.com', password: 'admin123', name: 'Dr. Sarah Johnson', role: 'admin', avatar: '' },
-  { id: '2', email: 'doctor@medicare.com', password: 'doctor123', name: 'Dr. Michael Chen', role: 'doctor', avatar: '' },
-  { id: '3', email: 'staff@medicare.com', password: 'staff123', name: 'Emily Davis', role: 'staff', avatar: '' },
-];
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -36,11 +32,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Check for stored auth token
     const storedUser = localStorage.getItem('medicare_user');
-    if (storedUser) {
+    const token = localStorage.getItem('medicare_token');
+
+    if (storedUser && token) {
       try {
         setUser(JSON.parse(storedUser));
       } catch {
         localStorage.removeItem('medicare_user');
+        localStorage.removeItem('medicare_token');
       }
     }
     setIsLoading(false);
@@ -48,65 +47,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string): Promise<void> => {
     setIsLoading(true);
-    
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const foundUser = mockUsers.find(u => u.email === email && u.password === password);
-    
-    if (!foundUser) {
+    try {
+      const response = await api.post('/auth/login', { email, password });
+      const { token, ...userData } = response.data;
+
+      const userWithId = { ...userData, id: userData._id }; // Ensure id exists
+
+      setUser(userWithId);
+      localStorage.setItem('medicare_user', JSON.stringify(userWithId));
+      localStorage.setItem('medicare_token', token);
+    } catch (error: any) {
+      throw new Error(error.response?.data?.message || 'Login failed');
+    } finally {
       setIsLoading(false);
-      throw new Error('Invalid email or password');
     }
-    
-    const { password: _, ...userWithoutPassword } = foundUser;
-    setUser(userWithoutPassword);
-    localStorage.setItem('medicare_user', JSON.stringify(userWithoutPassword));
-    localStorage.setItem('medicare_token', 'mock_jwt_token_' + foundUser.id);
-    setIsLoading(false);
   };
 
   const register = async (email: string, password: string, name: string, role: UserRole): Promise<void> => {
     setIsLoading(true);
-    
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const existingUser = mockUsers.find(u => u.email === email);
-    if (existingUser) {
+    try {
+      const response = await api.post('/auth/register', {
+        email,
+        password,
+        name,
+        role,
+        specialization: role === 'doctor' ? 'General' : undefined // Default for now
+      });
+      const { token, ...userData } = response.data;
+
+      const userWithId = { ...userData, id: userData._id };
+
+      setUser(userWithId);
+      localStorage.setItem('medicare_user', JSON.stringify(userWithId));
+      localStorage.setItem('medicare_token', token);
+    } catch (error: any) {
+      throw new Error(error.response?.data?.message || 'Registration failed');
+    } finally {
       setIsLoading(false);
-      throw new Error('Email already registered');
     }
-    
-    const newUser: User = {
-      id: Date.now().toString(),
-      email,
-      name,
-      role,
-    };
-    
-    setUser(newUser);
-    localStorage.setItem('medicare_user', JSON.stringify(newUser));
-    localStorage.setItem('medicare_token', 'mock_jwt_token_' + newUser.id);
-    setIsLoading(false);
   };
 
   const logout = () => {
     setUser(null);
     localStorage.removeItem('medicare_user');
     localStorage.removeItem('medicare_token');
+    window.location.href = '/login';
   };
 
   const forgotPassword = async (email: string): Promise<void> => {
-    // Simulate API call
+    // Simulate API call for now as backend doesn't implement this yet
     await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const foundUser = mockUsers.find(u => u.email === email);
-    if (!foundUser) {
-      throw new Error('Email not found');
-    }
-    
-    // In real app, would send reset email
     console.log('Password reset email sent to:', email);
   };
 
@@ -132,3 +122,4 @@ export function useAuth() {
   }
   return context;
 }
+

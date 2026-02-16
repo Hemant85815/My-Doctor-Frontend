@@ -4,7 +4,8 @@ import { Plus, Edit, Trash2, Filter, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DataTable } from '@/components/common/DataTable';
 import { StatusBadge } from '@/components/common/StatusBadge';
-import { mockDoctors, mockPatients, Appointment } from '@/data/mockData';
+import { Appointment } from '@/types';
+import api from '@/lib/api';
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,7 @@ import { useAuth } from '@/contexts/AuthContext';
 export default function Appointments() {
   const { user } = useAuth();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [doctors, setDoctors] = useState<{ id: string, name: string }[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [doctorFilter, setDoctorFilter] = useState<string>('all');
@@ -38,39 +40,44 @@ export default function Appointments() {
   const { toast } = useToast();
   const itemsPerPage = 6;
 
+  // Fetch Data
   useEffect(() => {
+    fetchAppointments();
+    fetchDoctors();
+  }, []);
+
   const fetchAppointments = async () => {
     try {
-      const res = await fetch("http://localhost:5000/api/appointments");
-      const data = await res.json();
-
-      // Map backend data to UI format
+      const { data } = await api.get('/appointments');
+      // Map backend _id to frontend id
       const formatted = data.map((apt: any) => ({
+        ...apt,
         id: apt._id,
-        patientName: apt.patientName,
-        doctorName: apt.doctorName,
-        doctorId: apt.doctorId || "",
-        patientId: "",
-        date: apt.date,
-        time: apt.time,
-        reason: apt.reason,
-        notes: apt.notes || "",
-        status: "scheduled",
       }));
-
       setAppointments(formatted);
     } catch (error) {
       console.error("Failed to fetch appointments", error);
+      toast({ title: "Error", description: "Failed to load appointments", variant: "destructive" });
     }
   };
 
-  fetchAppointments();
-}, []);
-
+  const fetchDoctors = async () => {
+    try {
+      const { data } = await api.get('/doctors');
+      const formatted = data.map((doc: any) => ({
+        id: doc._id,
+        name: doc.name
+      }));
+      setDoctors(formatted);
+    } catch (error) {
+      console.error("Failed to fetch doctors", error);
+    }
+  };
 
   // Form state
   const [formData, setFormData] = useState({
-    patientId: '',
+    patientName: '', // Added patientName as backend expects it or patientId
+    patientId: '', // Optional in backend if name provided, but good to have
     doctorId: '',
     date: '',
     time: '',
@@ -84,13 +91,13 @@ export default function Appointments() {
 
     // Role-based filtering for doctors
     if (user?.role === 'doctor') {
-      filtered = filtered.filter(apt => apt.doctorId === '2'); // Mock doctor ID
+      filtered = filtered.filter(apt => apt.doctorId === user.id);
     }
 
     if (searchQuery) {
       filtered = filtered.filter(apt =>
         apt.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        apt.doctorName.toLowerCase().includes(searchQuery.toLowerCase())
+        (apt.doctorName && apt.doctorName.toLowerCase().includes(searchQuery.toLowerCase()))
       );
     }
 
@@ -115,6 +122,7 @@ export default function Appointments() {
   const openEditDialog = (appointment: Appointment) => {
     setSelectedAppointment(appointment);
     setFormData({
+      patientName: appointment.patientName,
       patientId: appointment.patientId,
       doctorId: appointment.doctorId,
       date: appointment.date,
@@ -126,50 +134,71 @@ export default function Appointments() {
     setIsDialogOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const openNewDialog = () => {
+    setSelectedAppointment(null);
+    setFormData({
+      patientName: '',
+      patientId: '',
+      doctorId: '',
+      date: '',
+      time: '',
+      reason: '',
+      notes: '',
+      status: 'scheduled',
+    });
+    setIsDialogOpen(true);
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (selectedAppointment) {
-      const patient = mockPatients.find(p => p.id === formData.patientId);
-      const doctor = mockDoctors.find(d => d.id === formData.doctorId);
-      
-      setAppointments(prev => prev.map(apt => 
-        apt.id === selectedAppointment.id 
-          ? { 
-              ...apt, 
-              ...formData,
-              patientName: patient?.name || apt.patientName,
-              doctorName: doctor?.name || apt.doctorName,
-            }
-          : apt
-      ));
+
+    try {
+      if (selectedAppointment) {
+        // Update
+        await api.put(`/appointments/${selectedAppointment.id}`, formData);
+        toast({ title: 'Appointment updated', description: 'Success.' });
+      } else {
+        // Create
+        // We need a patientId? For now, if we don't have a patients list picker, 
+        // the backend might require patientId/Name. 
+        // My backend model has strict `doctorId` required but relaxed `patientId`.
+        // User needs to select a Doctor.
+
+        await api.post('/appointments', formData);
+        toast({ title: 'Appointment created', description: 'Success.' });
+      }
+      setIsDialogOpen(false);
+      fetchAppointments(); // Refresh list
+    } catch (error: any) {
       toast({
-        title: 'Appointment updated',
-        description: 'Appointment has been successfully updated.',
+        title: 'Error',
+        description: error.response?.data?.message || 'Operation failed',
+        variant: 'destructive'
       });
     }
-    setIsDialogOpen(false);
   };
 
-  const handleStatusChange = (appointmentId: string, newStatus: Appointment['status']) => {
-    setAppointments(prev => prev.map(apt => 
-      apt.id === appointmentId 
-        ? { ...apt, status: newStatus }
-        : apt
-    ));
-    toast({
-      title: 'Status updated',
-      description: `Appointment marked as ${newStatus}.`,
-    });
+  const handleStatusChange = async (appointmentId: string, newStatus: Appointment['status']) => {
+    try {
+      await api.put(`/appointments/${appointmentId}`, { status: newStatus });
+      setAppointments(prev => prev.map(apt =>
+        apt.id === appointmentId ? { ...apt, status: newStatus } : apt
+      ));
+      toast({ title: 'Status updated' });
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to update status', variant: 'destructive' });
+    }
   };
 
-  const handleDelete = (appointment: Appointment) => {
-    setAppointments(prev => prev.filter(apt => apt.id !== appointment.id));
-    toast({
-      title: 'Appointment cancelled',
-      description: 'Appointment has been removed.',
-      variant: 'destructive',
-    });
+  const handleDelete = async (appointment: Appointment) => {
+    if (!confirm('Are you sure?')) return;
+    try {
+      await api.delete(`/appointments/${appointment.id}`);
+      setAppointments(prev => prev.filter(apt => apt.id !== appointment.id));
+      toast({ title: 'Appointment cancelled', variant: 'destructive', });
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to delete', variant: 'destructive' });
+    }
   };
 
   const columns = [
@@ -180,7 +209,7 @@ export default function Appointments() {
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
             <span className="text-primary font-medium text-sm">
-              {apt.patientName.charAt(0)}
+              {apt.patientName?.charAt(0) || '?'}
             </span>
           </div>
           <div>
@@ -194,7 +223,7 @@ export default function Appointments() {
       key: 'doctor',
       header: 'Doctor',
       render: (apt: Appointment) => (
-        <span className="text-foreground">{apt.doctorName}</span>
+        <span className="text-foreground">{apt.doctorName || doctors.find(d => d.id === apt.doctorId)?.name || 'Unknown'}</span>
       ),
     },
     {
@@ -217,7 +246,7 @@ export default function Appointments() {
       header: 'Actions',
       render: (apt: Appointment) => (
         <div className="flex items-center gap-2">
-          <Select 
+          <Select
             defaultValue={apt.status}
             onValueChange={(value) => handleStatusChange(apt.id, value as Appointment['status'])}
           >
@@ -249,6 +278,10 @@ export default function Appointments() {
           <h1 className="page-header mb-1">Appointment Management</h1>
           <p className="text-muted-foreground">View and manage all appointments</p>
         </div>
+        <Button onClick={openNewDialog}>
+          <Plus className="w-4 h-4 mr-2" />
+          New Appointment
+        </Button>
       </div>
 
       {/* Filters */}
@@ -257,7 +290,7 @@ export default function Appointments() {
           <Filter className="w-4 h-4 text-muted-foreground" />
           <span className="text-sm font-medium">Filters:</span>
         </div>
-        
+
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-40">
             <SelectValue placeholder="Status" />
@@ -277,15 +310,15 @@ export default function Appointments() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Doctors</SelectItem>
-            {mockDoctors.map(doctor => (
+            {doctors.map(doctor => (
               <SelectItem key={doctor.id} value={doctor.id}>{doctor.name}</SelectItem>
             ))}
           </SelectContent>
         </Select>
 
         {(statusFilter !== 'all' || doctorFilter !== 'all') && (
-          <Button 
-            variant="ghost" 
+          <Button
+            variant="ghost"
             size="sm"
             onClick={() => {
               setStatusFilter('all');
@@ -312,59 +345,72 @@ export default function Appointments() {
         }}
       />
 
-      {/* Edit Dialog */}
+      {/* Edit/Create Dialog */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Edit Appointment</DialogTitle>
+            <DialogTitle>{selectedAppointment ? 'Edit' : 'New'} Appointment</DialogTitle>
             <DialogDescription>
-              Update appointment details below.
+              {selectedAppointment ? 'Update details below.' : 'Schedule a new appointment.'}
             </DialogDescription>
           </DialogHeader>
-          
+
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Patient Name - For simplicity allowing text input, ideally a select from Patients API */}
+            <div className="space-y-2">
+              <Label htmlFor="patientName">Patient Name</Label>
+              <Input
+                id="patientName"
+                value={formData.patientName}
+                onChange={(e) => setFormData(prev => ({ ...prev, patientName: e.target.value }))}
+                required
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="date">Date</Label>
-                <Input 
-                  id="date" 
-                  type="date" 
+                <Input
+                  id="date"
+                  type="date"
                   value={formData.date}
                   onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
+                  required
                 />
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="time">Time</Label>
-                <Input 
-                  id="time" 
-                  type="time" 
+                <Input
+                  id="time"
+                  type="time"
                   value={formData.time}
                   onChange={(e) => setFormData(prev => ({ ...prev, time: e.target.value }))}
+                  required
                 />
               </div>
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="doctor">Doctor</Label>
-              <Select 
+              <Select
                 value={formData.doctorId}
                 onValueChange={(value) => setFormData(prev => ({ ...prev, doctorId: value }))}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Select Doctor" />
                 </SelectTrigger>
                 <SelectContent>
-                  {mockDoctors.map(doctor => (
+                  {doctors.map(doctor => (
                     <SelectItem key={doctor.id} value={doctor.id}>{doctor.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="status">Status</Label>
-              <Select 
+              <Select
                 value={formData.status}
                 onValueChange={(value) => setFormData(prev => ({ ...prev, status: value as Appointment['status'] }))}
               >
@@ -379,31 +425,31 @@ export default function Appointments() {
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="reason">Reason</Label>
-              <Input 
-                id="reason" 
+              <Input
+                id="reason"
                 value={formData.reason}
                 onChange={(e) => setFormData(prev => ({ ...prev, reason: e.target.value }))}
               />
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="notes">Notes</Label>
-              <Textarea 
-                id="notes" 
+              <Textarea
+                id="notes"
                 value={formData.notes}
                 onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
                 rows={3}
               />
             </div>
-            
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit">Update Appointment</Button>
+              <Button type="submit">{selectedAppointment ? 'Update' : 'Create'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

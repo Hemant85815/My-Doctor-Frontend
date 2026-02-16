@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -16,11 +16,12 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { mockPatients, mockDoctors } from '@/data/mockData';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import api from '@/lib/api';
+import { Patient, Doctor } from '@/types';
 
 const appointmentSchema = z.object({
-  patientName: z.string().min(2, 'Patient name must be at least 2 characters'),
+  patientId: z.string().min(1, 'Please select a patient'),
   doctorId: z.string().min(1, 'Please select a doctor'),
   date: z.string().min(1, 'Please select a date'),
   time: z.string().min(1, 'Please select a time'),
@@ -32,6 +33,8 @@ type AppointmentForm = z.infer<typeof appointmentSchema>;
 
 export default function NewAppointment() {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -39,52 +42,66 @@ export default function NewAppointment() {
     resolver: zodResolver(appointmentSchema),
   });
 
-  const selectedPatient = mockPatients.find(p => p.id === watch('patientName'));
-  const selectedDoctor = mockDoctors.find(d => d.id === watch('doctorId'));
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [patientsRes, doctorsRes] = await Promise.all([
+          api.get('/patients'),
+          api.get('/doctors')
+        ]);
+
+        // Map _id to id
+        const mappedPatients = patientsRes.data.map((p: any) => ({ ...p, id: p._id }));
+        const mappedDoctors = doctorsRes.data.map((d: any) => ({ ...d, id: d._id }));
+
+        setPatients(mappedPatients);
+        setDoctors(mappedDoctors);
+      } catch (error) {
+        console.error("Failed to fetch data", error);
+        toast({ title: "Error", description: "Failed to load options", variant: "destructive" });
+      }
+    };
+    fetchData();
+  }, []);
+
+  const selectedPatient = patients.find(p => p.id === watch('patientId'));
+  const selectedDoctor = doctors.find(d => d.id === watch('doctorId'));
 
   const onSubmit = async (data: AppointmentForm) => {
-  setIsSubmitting(true);
+    setIsSubmitting(true);
 
-  try {
-    const payload = {
-      patientName: data.patientName,
-      doctorId: data.doctorId,
-      doctorName: selectedDoctor?.name || "Unknown",
-      date: data.date,
-      time: data.time,
-      reason: data.reason,
-      notes: data.notes,
-    };
+    try {
+      const payload = {
+        patientId: data.patientId,
+        patientName: selectedPatient?.name || "Unknown",
+        doctorId: data.doctorId,
+        doctorName: selectedDoctor?.name || "Unknown",
+        date: data.date,
+        time: data.time,
+        reason: data.reason,
+        notes: data.notes,
+        status: 'scheduled'
+      };
 
-    const res = await fetch("/api/appointments", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+      await api.post("/appointments", payload);
 
-    if (!res.ok) {
-      throw new Error("Failed to create appointment");
+      toast({
+        title: "Appointment scheduled!",
+        description: `Appointment created successfully`,
+      });
+
+      navigate("/dashboard"); // Or appointments list
+    } catch (error: any) {
+      console.error(error);
+      toast({
+        title: "Error",
+        description: error.response?.data?.message || "Failed to schedule appointment",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
     }
-
-    toast({
-      title: "Appointment scheduled!",
-      description: `Appointment created successfully`,
-    });
-
-    navigate("/dashboard");
-  } catch (error) {
-    console.error(error);
-    toast({
-      title: "Error",
-      description: "Failed to schedule appointment",
-      variant: "destructive",
-    });
-  } finally {
-    setIsSubmitting(false);
-  }
-};
+  };
 
   const timeSlots = [
     '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
@@ -110,19 +127,25 @@ export default function NewAppointment() {
             <User className="w-5 h-5 text-primary" />
             Patient Information
           </h2>
-          
+
           <div className="space-y-2">
-       <Label htmlFor="patientName">Patient Name</Label>
-       <Input 
-         id="patientName" 
-         placeholder="Enter full name"
-         className="h-12"
-         {...register('patientName')} 
-       />
-       {errors.patientName && (
-         <p className="text-sm text-destructive">{errors.patientName.message}</p>
-       )}
-     </div>
+            <Label htmlFor="patientId">Select Patient</Label>
+            <Select onValueChange={(value) => setValue('patientId', value)}>
+              <SelectTrigger className="h-12">
+                <SelectValue placeholder="Choose a patient" />
+              </SelectTrigger>
+              <SelectContent>
+                {patients.map(patient => (
+                  <SelectItem key={patient.id} value={patient.id}>
+                    {patient.name} ({patient.phone})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {errors.patientId && (
+              <p className="text-sm text-destructive">{errors.patientId.message}</p>
+            )}
+          </div>
 
           {selectedPatient && (
             <div className="mt-4 p-4 bg-muted/50 rounded-lg">
@@ -153,7 +176,7 @@ export default function NewAppointment() {
             <Stethoscope className="w-5 h-5 text-primary" />
             Doctor Selection
           </h2>
-          
+
           <div className="space-y-2">
             <Label htmlFor="doctorId">Select Doctor</Label>
             <Select onValueChange={(value) => setValue('doctorId', value)}>
@@ -161,7 +184,7 @@ export default function NewAppointment() {
                 <SelectValue placeholder="Choose a doctor" />
               </SelectTrigger>
               <SelectContent>
-                {mockDoctors.filter(d => d.available).map(doctor => (
+                {doctors.map(doctor => (
                   <SelectItem key={doctor.id} value={doctor.id}>
                     <div className="flex items-center gap-2">
                       <span>{doctor.name}</span>
@@ -184,8 +207,8 @@ export default function NewAppointment() {
                   <p className="font-medium">{selectedDoctor.specialization}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Contact</p>
-                  <p className="font-medium">{selectedDoctor.phone}</p>
+                  <p className="text-muted-foreground">Availability</p>
+                  <p className="font-medium">{selectedDoctor.available ? 'Available' : 'Unavailable'}</p>
                 </div>
               </div>
             </div>
@@ -197,25 +220,25 @@ export default function NewAppointment() {
             <Calendar className="w-5 h-5 text-primary" />
             Schedule
           </h2>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="date">Date</Label>
               <div className="relative">
                 <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
-                <Input 
-                  id="date" 
-                  type="date" 
+                <Input
+                  id="date"
+                  type="date"
                   className="pl-10 h-12"
                   min={new Date().toISOString().split('T')[0]}
-                  {...register('date')} 
+                  {...register('date')}
                 />
               </div>
               {errors.date && (
                 <p className="text-sm text-destructive">{errors.date.message}</p>
               )}
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="time">Time Slot</Label>
               <Select onValueChange={(value) => setValue('time', value)}>
@@ -241,28 +264,28 @@ export default function NewAppointment() {
             <FileText className="w-5 h-5 text-primary" />
             Appointment Details
           </h2>
-          
+
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="reason">Reason for Visit</Label>
-              <Input 
-                id="reason" 
+              <Input
+                id="reason"
                 placeholder="e.g., Annual checkup, Follow-up visit"
                 className="h-12"
-                {...register('reason')} 
+                {...register('reason')}
               />
               {errors.reason && (
                 <p className="text-sm text-destructive">{errors.reason.message}</p>
               )}
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="notes">Additional Notes (Optional)</Label>
-              <Textarea 
-                id="notes" 
+              <Textarea
+                id="notes"
                 placeholder="Any additional information or special requirements..."
                 rows={4}
-                {...register('notes')} 
+                {...register('notes')}
               />
             </div>
           </div>
@@ -270,16 +293,16 @@ export default function NewAppointment() {
 
 
         <div className="flex gap-4">
-          <Button 
-            type="button" 
-            variant="outline" 
+          <Button
+            type="button"
+            variant="outline"
             className="flex-1 h-12"
             onClick={() => navigate('/appointments')}
           >
             Cancel
           </Button>
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             className="flex-1 h-12"
             disabled={isSubmitting}
           >
@@ -297,3 +320,4 @@ export default function NewAppointment() {
     </div>
   );
 }
+

@@ -1,13 +1,32 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/common/StatusBadge';
-import { mockAppointments } from '@/data/mockData';
 import { cn } from '@/lib/utils';
+import api from '@/lib/api';
+import { Appointment } from '@/types';
 
 export default function CalendarPage() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<'month' | 'week'>('month');
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+
+  useEffect(() => {
+    const fetchAppointments = async () => {
+      try {
+        const { data } = await api.get('/appointments');
+        // Map backend _id to frontend id
+        const formatted = data.map((apt: any) => ({
+          ...apt,
+          id: apt._id,
+        }));
+        setAppointments(formatted);
+      } catch (error) {
+        console.error("Failed to fetch appointments", error);
+      }
+    };
+    fetchAppointments();
+  }, []);
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -36,7 +55,7 @@ export default function CalendarPage() {
   };
 
   const getAppointmentsForDate = (date: string) => {
-    return mockAppointments.filter(apt => apt.date === date);
+    return appointments.filter(apt => apt.date === date);
   };
 
   const formatDateString = (day: number) => {
@@ -56,7 +75,7 @@ export default function CalendarPage() {
 
   const calendarDays = useMemo(() => {
     const days = [];
-    
+
     // Previous month days
     for (let i = firstDayOfMonth - 1; i >= 0; i--) {
       days.push({
@@ -65,7 +84,7 @@ export default function CalendarPage() {
         date: '',
       });
     }
-    
+
     // Current month days
     for (let i = 1; i <= daysInMonth; i++) {
       days.push({
@@ -74,7 +93,7 @@ export default function CalendarPage() {
         date: formatDateString(i),
       });
     }
-    
+
     // Next month days
     const remainingDays = 42 - days.length;
     for (let i = 1; i <= remainingDays; i++) {
@@ -84,9 +103,11 @@ export default function CalendarPage() {
         date: '',
       });
     }
-    
+
     return days;
   }, [year, month, daysInMonth, firstDayOfMonth, lastDayOfPrevMonth]);
+
+  const todaysAppointments = appointments.filter(apt => apt.date === new Date().toISOString().split('T')[0]);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -95,9 +116,9 @@ export default function CalendarPage() {
           <h1 className="page-header mb-1">Calendar</h1>
           <p className="text-muted-foreground">View and manage appointments by date</p>
         </div>
-        
+
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setViewMode('month')} 
+          <Button variant="outline" size="sm" onClick={() => setViewMode('month')}
             className={viewMode === 'month' ? 'bg-primary text-primary-foreground' : ''}>
             Month
           </Button>
@@ -135,12 +156,12 @@ export default function CalendarPage() {
               {day}
             </div>
           ))}
-          
+
           {/* Calendar Days */}
           {calendarDays.map((dayInfo, index) => {
-            const appointments = dayInfo.isCurrentMonth ? getAppointmentsForDate(dayInfo.date) : [];
+            const dayAppointments = dayInfo.isCurrentMonth ? getAppointmentsForDate(dayInfo.date) : [];
             const isTodayDate = dayInfo.isCurrentMonth && isToday(dayInfo.day);
-            
+
             return (
               <div
                 key={index}
@@ -155,9 +176,9 @@ export default function CalendarPage() {
                 )}>
                   {dayInfo.day}
                 </div>
-                
+
                 <div className="space-y-1">
-                  {appointments.slice(0, 2).map(apt => (
+                  {dayAppointments.slice(0, 2).map(apt => (
                     <div
                       key={apt.id}
                       className={cn(
@@ -168,12 +189,12 @@ export default function CalendarPage() {
                         apt.status === 'in-progress' && "bg-warning/10 text-warning hover:bg-warning/20"
                       )}
                     >
-                      <span className="font-medium">{apt.time}</span> {apt.patientName.split(' ')[0]}
+                      <span className="font-medium">{apt.time}</span> {apt.patientName?.split(' ')[0]}
                     </div>
                   ))}
-                  {appointments.length > 2 && (
+                  {dayAppointments.length > 2 && (
                     <p className="text-xs text-muted-foreground pl-2">
-                      +{appointments.length - 2} more
+                      +{dayAppointments.length - 2} more
                     </p>
                   )}
                 </div>
@@ -189,9 +210,9 @@ export default function CalendarPage() {
           <Clock className="w-5 h-5 text-primary" />
           Today's Schedule
         </h3>
-        
+
         <div className="space-y-3">
-          {mockAppointments.filter(apt => apt.date === new Date().toISOString().split('T')[0] || apt.date === '2025-01-25').slice(0, 5).map(apt => (
+          {todaysAppointments.slice(0, 5).map(apt => (
             <div key={apt.id} className="flex items-center gap-4 p-4 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
               <div className="w-16 text-center">
                 <p className="font-semibold text-foreground">{apt.time}</p>
@@ -203,8 +224,8 @@ export default function CalendarPage() {
               <StatusBadge status={apt.status} />
             </div>
           ))}
-          
-          {mockAppointments.filter(apt => apt.date === new Date().toISOString().split('T')[0]).length === 0 && (
+
+          {todaysAppointments.length === 0 && (
             <p className="text-center text-muted-foreground py-8">
               No appointments scheduled for today
             </p>

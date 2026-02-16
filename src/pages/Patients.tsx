@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Plus, Edit, Trash2, Eye, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DataTable } from '@/components/common/DataTable';
-import {  Patient } from '@/data/mockData';
+import { Patient } from '@/types';
+import api from '@/lib/api';
 import {
   Dialog,
   DialogContent,
@@ -40,11 +41,7 @@ const patientSchema = z.object({
 type PatientForm = z.infer<typeof patientSchema>;
 
 export default function Patients() {
-  const [patients, setPatients] = useState<Patient[]>(() => {
-  const storedPatients = localStorage.getItem('patients');
-  return storedPatients ? JSON.parse(storedPatients) : [];
-  });
-
+  const [patients, setPatients] = useState<Patient[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
@@ -61,11 +58,30 @@ export default function Patients() {
     },
   });
 
+  useEffect(() => {
+    fetchPatients();
+  }, []);
+
+  const fetchPatients = async () => {
+    try {
+      const { data } = await api.get('/patients');
+      // Map backend _id to frontend id
+      const formatted = data.map((p: any) => ({
+        ...p,
+        id: p._id,
+      }));
+      setPatients(formatted);
+    } catch (error) {
+      console.error("Failed to fetch patients", error);
+      toast({ title: "Error", description: "Failed to load patients", variant: "destructive" });
+    }
+  };
+
   const filteredPatients = useMemo(() => {
     return patients.filter(patient =>
       patient.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      patient.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      patient.phone.includes(searchQuery)
+      (patient.email && patient.email.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (patient.phone && patient.phone.includes(searchQuery))
     );
   }, [patients, searchQuery]);
 
@@ -97,7 +113,7 @@ export default function Patients() {
       name: patient.name,
       email: patient.email,
       phone: patient.phone,
-      dateOfBirth: patient.dateOfBirth,
+      dateOfBirth: patient.dateOfBirth ? patient.dateOfBirth.split('T')[0] : '', // Format date
       gender: patient.gender,
       address: patient.address,
       bloodGroup: patient.bloodGroup,
@@ -111,60 +127,38 @@ export default function Patients() {
     setIsViewDialogOpen(true);
   };
 
-  const onSubmit = (data: PatientForm) => {
-    if (selectedPatient) {
-          setPatients(prev => {
-      const updated = prev.map(p => 
-        p.id === selectedPatient.id 
-              ? { ...selectedPatient, ...data }
-          : p
-      );
-      localStorage.setItem('patients', JSON.stringify(updated));
-      return updated;
-    });    
+  const onSubmit = async (data: PatientForm) => {
+    try {
+      if (selectedPatient) {
+        // Update
+        await api.put(`/patients/${selectedPatient.id}`, data);
+        toast({ title: 'Patient updated', description: 'Success.' });
+      } else {
+        // Create
+        await api.post('/patients', data);
+        toast({ title: 'Patient added', description: 'Success.' });
+      }
+      setIsDialogOpen(false);
+      fetchPatients();
+    } catch (error: any) {
       toast({
-        title: 'Patient updated',
-        description: 'Patient record has been successfully updated.',
-      });
-    } else {
-      const newPatient: Patient = {
-        id: Date.now().toString(),
-        name: data.name,
-        email: data.email,
-        phone: data.phone,
-        dateOfBirth: data.dateOfBirth,
-        gender: data.gender,
-        address: data.address,
-        bloodGroup: data.bloodGroup,
-        medicalHistory: data.medicalHistory,
-        createdAt: new Date().toISOString().split('T')[0],
-      };
-      setPatients(prev => {
-  const updated = [newPatient, ...prev];
-  localStorage.setItem('patients', JSON.stringify(updated));
-  return updated;
-});
-      toast({
-        title: 'Patient added',
-        description: 'New patient has been successfully registered.',
+        title: 'Error',
+        description: error.response?.data?.message || 'Operation failed',
+        variant: 'destructive'
       });
     }
-    setIsDialogOpen(false);
   };
 
-  const handleDelete = (patient: Patient) => {
-  setPatients(prev => {
-    const updated = prev.filter(p => p.id !== patient.id);
-    localStorage.setItem('patients', JSON.stringify(updated));
-    return updated;
-  });
-
-  toast({
-    title: 'Patient deleted',
-    description: 'Patient record has been removed.',
-    variant: 'destructive',
-  });
-};
+  const handleDelete = async (patient: Patient) => {
+    if (!confirm('Are you sure?')) return;
+    try {
+      await api.delete(`/patients/${patient.id}`);
+      setPatients(prev => prev.filter(p => p.id !== patient.id));
+      toast({ title: 'Patient deleted', variant: 'destructive' });
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to delete', variant: 'destructive' });
+    }
+  };
 
   const columns = [
     {
@@ -248,13 +242,13 @@ export default function Patients() {
               {selectedPatient ? 'Edit Patient' : 'Add New Patient'}
             </DialogTitle>
             <DialogDescription>
-              {selectedPatient 
+              {selectedPatient
                 ? 'Update patient information below.'
                 : 'Fill in the patient details to create a new record.'
               }
             </DialogDescription>
           </DialogHeader>
-          
+
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -264,7 +258,7 @@ export default function Patients() {
                   <p className="text-sm text-destructive">{errors.name.message}</p>
                 )}
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
                 <Input id="email" type="email" {...register('email')} />
@@ -272,7 +266,7 @@ export default function Patients() {
                   <p className="text-sm text-destructive">{errors.email.message}</p>
                 )}
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="phone">Phone</Label>
                 <Input id="phone" {...register('phone')} />
@@ -280,7 +274,7 @@ export default function Patients() {
                   <p className="text-sm text-destructive">{errors.phone.message}</p>
                 )}
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="dateOfBirth">Date of Birth</Label>
                 <Input id="dateOfBirth" type="date" {...register('dateOfBirth')} />
@@ -288,7 +282,7 @@ export default function Patients() {
                   <p className="text-sm text-destructive">{errors.dateOfBirth.message}</p>
                 )}
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="gender">Gender</Label>
                 <Select onValueChange={(value) => setValue('gender', value as 'male' | 'female' | 'other')} defaultValue={watch('gender')}>
@@ -302,7 +296,7 @@ export default function Patients() {
                   </SelectContent>
                 </Select>
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="bloodGroup">Blood Group</Label>
                 <Select onValueChange={(value) => setValue('bloodGroup', value)} defaultValue={watch('bloodGroup')}>
@@ -317,7 +311,7 @@ export default function Patients() {
                 </Select>
               </div>
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="address">Address</Label>
               <Input id="address" {...register('address')} />
@@ -325,12 +319,12 @@ export default function Patients() {
                 <p className="text-sm text-destructive">{errors.address.message}</p>
               )}
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="medicalHistory">Medical History (Optional)</Label>
               <Textarea id="medicalHistory" {...register('medicalHistory')} rows={3} />
             </div>
-            
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                 Cancel
@@ -349,7 +343,7 @@ export default function Patients() {
           <DialogHeader>
             <DialogTitle>Patient Details</DialogTitle>
           </DialogHeader>
-          
+
           {selectedPatient && (
             <div className="space-y-4">
               <div className="flex items-center gap-4">
@@ -363,7 +357,7 @@ export default function Patients() {
                   <p className="text-muted-foreground">{selectedPatient.email}</p>
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-2 gap-4 pt-4 border-t">
                 <div>
                   <p className="text-sm text-muted-foreground">Phone</p>
@@ -382,19 +376,19 @@ export default function Patients() {
                   <p className="font-medium">{selectedPatient.bloodGroup}</p>
                 </div>
               </div>
-              
+
               <div className="pt-4 border-t">
                 <p className="text-sm text-muted-foreground">Address</p>
                 <p className="font-medium">{selectedPatient.address}</p>
               </div>
-              
+
               {selectedPatient.medicalHistory && (
                 <div className="pt-4 border-t">
                   <p className="text-sm text-muted-foreground">Medical History</p>
                   <p className="font-medium">{selectedPatient.medicalHistory}</p>
                 </div>
               )}
-              
+
               <div className="pt-4 border-t">
                 <p className="text-sm text-muted-foreground">Registered On</p>
                 <p className="font-medium">{selectedPatient.createdAt}</p>
@@ -403,6 +397,66 @@ export default function Patients() {
           )}
         </DialogContent>
       </Dialog>
-    </div>
+      {/* View Dialog */}
+      <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Patient Details</DialogTitle>
+          </DialogHeader>
+
+          {selectedPatient && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                  <span className="text-primary font-semibold text-xl">
+                    {selectedPatient.name.charAt(0)}
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold">{selectedPatient.name}</h3>
+                  <p className="text-muted-foreground">{selectedPatient.email}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 pt-4 border-t">
+                <div>
+                  <p className="text-sm text-muted-foreground">Phone</p>
+                  <p className="font-medium">{selectedPatient.phone}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Date of Birth</p>
+                  <p className="font-medium">{selectedPatient.dateOfBirth}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Gender</p>
+                  <p className="font-medium capitalize">{selectedPatient.gender}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Blood Group</p>
+                  <p className="font-medium">{selectedPatient.bloodGroup}</p>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t">
+                <p className="text-sm text-muted-foreground">Address</p>
+                <p className="font-medium">{selectedPatient.address}</p>
+              </div>
+
+              {selectedPatient.medicalHistory && (
+                <div className="pt-4 border-t">
+                  <p className="text-sm text-muted-foreground">Medical History</p>
+                  <p className="font-medium">{selectedPatient.medicalHistory}</p>
+                </div>
+              )}
+
+              <div className="pt-4 border-t">
+                <p className="text-sm text-muted-foreground">Registered On</p>
+                <p className="font-medium">{selectedPatient.createdAt}</p>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div >
   );
 }
